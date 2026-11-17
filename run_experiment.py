@@ -102,7 +102,10 @@ def wait_ready(proc, port, log):
 
 
 def stop(proc):
-    os.killpg(proc.pid, signal.SIGTERM)  # whole group: uv run spawns a child process
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)  # whole group: uv run spawns a child process
+    except ProcessLookupError:  # server already exited (e.g. failed to start)
+        return
     try:
         proc.wait(30)
     except subprocess.TimeoutExpired:
