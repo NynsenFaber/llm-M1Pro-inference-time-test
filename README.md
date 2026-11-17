@@ -94,12 +94,23 @@ that worked. Useful options:
 uv run python run_experiment.py --only mlx-lm vllm      # rerun a subset
 uv run python run_experiment.py --runs 20 --max-tokens 2048   # longer outputs
 uv run python run_experiment.py --smooth 32                    # smoother lines
+uv run python run_experiment.py --temperature 0.7 --seed 42    # sampling, reproducible
 ```
 
 All requests use `temperature=0`, the same prompt (a request for a long story, so each
 answer is long enough to show the trend) and `max_tokens` 1024 by default. Times are per
 generated token, so frameworks stay comparable even if they stop at slightly different
-lengths. Servers may stream several tokens in one chunk; the script then spreads that
+lengths.
+
+**Reproducibility.** By default decoding is greedy (`temperature=0`): the model always
+picks the most likely token, so there is nothing random and every run of the same prompt
+gives the same text. With `--temperature > 0` the script also sends `--seed` (default 0)
+with every request, so sampled outputs repeat too. The seed is not sent with greedy
+decoding because mlx-lm turns off its batched generation path for seeded requests, which
+would change what is measured. Timings still vary a little between runs (that is what
+the error bars show); no seed can remove that.
+
+Servers may stream several tokens in one chunk; the script then spreads that
 chunk's time evenly over its tokens, using the token count from the response's `usage`.
 
 ## Run a server by hand

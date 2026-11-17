@@ -42,6 +42,8 @@ p.add_argument(
     default="Write a long, detailed story of at least 1500 words about a lighthouse keeper.",
 )
 p.add_argument("--smooth", type=int, default=16, help="moving-average window for the line plot")
+p.add_argument("--temperature", type=float, default=0.0, help="0 = greedy, already deterministic")
+p.add_argument("--seed", type=int, default=0, help="sampling seed, sent only if temperature > 0")
 p.add_argument("--startup-timeout", type=int, default=1800, help="s; first start downloads")
 args = p.parse_args()
 
@@ -52,10 +54,14 @@ def chat(port, max_tokens):
         "model": MODEL,
         "messages": [{"role": "user", "content": args.prompt}],
         "max_tokens": max_tokens,
-        "temperature": 0,
+        "temperature": args.temperature,
         "stream": True,
         "stream_options": {"include_usage": True},
     }
+    if args.temperature > 0:
+        # Only when sampling: mlx-lm switches off its batched path for seeded requests,
+        # so sending it with greedy decoding would change what is measured for nothing.
+        body["seed"] = args.seed
     times, usage = [], None
     t0 = time.perf_counter()
     with httpx.stream(
@@ -157,7 +163,9 @@ for name, data in (("results.csv", rows), ("token_times.csv", token_rows)):
 done = [k for k in args.only if any(r["framework"] == k for r in rows)]
 labels = [SERVERS[k][0] for k in done]
 colors = dict(zip(SERVERS, ["#4C72B0", "#55A868", "#C44E52"]))
-title = f"{MODEL}, bf16, M1 Pro, {args.runs} runs, max_tokens={args.max_tokens}"
+title = f"{MODEL}, bf16, M1 Pro, {args.runs} runs, max_tokens={args.max_tokens}, " + (
+    f"temperature={args.temperature}, seed={args.seed}" if args.temperature > 0 else "greedy"
+)
 
 # Bar plot: mean time per generated token (whole request / tokens), error bar = std.
 ms = {k: [r["ms_per_token"] for r in rows if r["framework"] == k] for k in done}
