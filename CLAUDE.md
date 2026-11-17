@@ -36,8 +36,9 @@ uv sync                                   # client env
 uv run hf auth login                      # Gemma is gated: accept the license on the model page first
 uv run hf download google/gemma-3-1b-it   # shared cache ~/.cache/huggingface/hub
 
-# A — transformers on MPS
-uv run --project servers/transformers transformers serve --port 8001
+# A — transformers on MPS (bf16, pinned model, no CPU fallback)
+servers/transformers/serve.sh                          # sequential model.generate()
+servers/transformers/serve.sh --continuous-batching    # optional variant: paged KV + batching
 # B — mlx-lm
 uv run --project servers/mlx-lm mlx_lm.server --model google/gemma-3-1b-it --port 8002
 # C — vllm-metal
@@ -82,14 +83,25 @@ Always check exact flags with each tool's `--help`; the commands above are a sta
 - Consider `--no-enable-prefix-caching` on vllm-metal so repeated prompts don't
   shortcut TTFT; mlx-lm's server also has a prompt cache. Note which is on in results.
 
+- `transformers serve` (5.23, read from source): `--device mps --dtype bfloat16` are
+  passed straight to `from_pretrained`; the positional model arg pins the server, so
+  requests must send `"model": "google/gemma-3-1b-it"` (or omit it). Streaming
+  responses always end with a chunk carrying `usage`. Without `--continuous-batching`
+  requests run one at a time on a single inference thread, so N = 4/16 queue up;
+  with it, it uses paged attention (Metal flash kernel on MPS only if the `kernels`
+  package is installed, otherwise its default attention). `temperature: 0` sets `do_sample=False`.
+
 ## Open questions (update this list as they are answered)
 
-- Does `transformers serve` handle Gemma 3 on MPS, or is a FastAPI + `TextIteratorStreamer` wrapper needed?
+- Does `transformers serve` actually load and run Gemma 3 on MPS without errors (not yet run on the Mac)?
 - Do mlx-lm and vllm-metal load `google/gemma-3-1b-it` directly, or is the mlx-community bf16 copy needed?
 - Does each server return `usage` in the final streamed chunk?
 - Expectation to test: at N = 1 the gap between B and C is small; C should pull ahead at N = 16.
 
 ## Conventions
+
+- When writing or reviewing code, use the `ponytail` skill (smallest complete change,
+  stdlib/existing tools first, no wrappers nobody asked for); `ponytail-review` for reviews.
 
 - Python 3.12 everywhere (`.python-version`). Manage deps with `uv add` / `uv add --project servers/<name>`; commit lockfiles.
 - Ruff for lint/format: `uv run ruff check . && uv run ruff format .`

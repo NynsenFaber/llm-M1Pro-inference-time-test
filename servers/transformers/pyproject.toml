@@ -8,9 +8,6 @@ dependencies = [
     "transformers[serving]>=5.0",
     "torch>=2.6",            # macOS arm64 wheels on PyPI include the MPS backend
     "accelerate>=1.0",
-    # for a small FastAPI fallback wrapper, only needed if `transformers serve` misbehaves with Gemma 3
-    "fastapi>=0.115",
-    "uvicorn>=0.32",
 ]
 
 [tool.uv]
