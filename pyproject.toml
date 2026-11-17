@@ -1,0 +1,23 @@
+[project]
+name = "gemma-m1pro-bench"
+version = "0.1.0"
+description = "Benchmark client for Gemma 3 1B on an M1 Pro: transformers (MPS) vs mlx-lm vs vllm-metal"
+readme = "README.md"
+# vllm-metal needs 3.12/3.13; keep every env on 3.12 so all three match.
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "httpx>=0.28",           # async streaming client for /v1/chat/completions
+    "pandas>=2.2",           # results CSV + median/spread
+    "matplotlib>=3.9",       # plots
+    "huggingface-hub>=1.0",  # provides the `hf` CLI (auth login, download)
+]
+
+[dependency-groups]
+dev = ["ruff>=0.8"]
+
+[tool.uv]
+# Not an installable package: just scripts (bench.py, plot.py).
+package = false
+
+[tool.ruff]
+line-length = 100
