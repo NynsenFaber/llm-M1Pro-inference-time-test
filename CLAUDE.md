@@ -110,7 +110,9 @@ Always check exact flags with each tool's `--help`; the commands above are a sta
 
 ## Open questions (update this list as they are answered)
 
-- Does `transformers serve` actually load and run Gemma 3 on MPS without errors (not yet run on the Mac)?
+- Does `transformers serve` run Gemma 3 on MPS end to end? First Mac run: it failed to load
+  `AutoProcessor` (Gemma3Processor wants preprocessor_config.json, absent in the 1B text repo);
+  `servers/transformers/serve.py` now falls back to `AutoTokenizer`. Not yet re-run.
 - Do mlx-lm and vllm-metal load `google/gemma-3-1b-it` directly, or is the mlx-community bf16 copy needed?
 - Does each server return `usage` in the final streamed chunk?
 - Expectation to test: at N = 1 the gap between B and C is small; C should pull ahead at N = 16.
