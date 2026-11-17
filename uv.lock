@@ -122,6 +122,7 @@ dependencies = [
     { name = "httpx" },
     { name = "huggingface-hub" },
     { name = "matplotlib" },
+    { name = "numpy" },
     { name = "pandas" },
 ]
 
@@ -135,6 +136,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.28" },
     { name = "huggingface-hub", specifier = ">=1.0" },
     { name = "matplotlib", specifier = ">=3.9" },
+    { name = "numpy", specifier = ">=2.5.5" },
     { name = "pandas", specifier = ">=2.2" },
 ]
 

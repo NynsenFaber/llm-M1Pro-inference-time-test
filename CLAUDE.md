@@ -22,8 +22,10 @@ cannot run MPS/MLX/Metal. Don't claim benchmark numbers that weren't measured on
 
 - `pyproject.toml` (root) — benchmark client env: httpx, pandas, matplotlib, `hf` CLI. `uv sync` here.
 - `run_experiment.py` — the experiment: starts each server's `serve.sh` in turn, 3 warm-up +
-  10 timed streamed requests, stops it; writes `results/results.csv`,
-  `results/inference_time.png` (mean time per framework, std error bars), `results/logs/`.
+  10 timed streamed requests, stops it; writes `results/results.csv` (per request),
+  `results/token_times.csv` (elapsed time at each generated token), `results/time_per_token.png`
+  (bar: mean ms per generated token, std error bars), `results/latency_vs_tokens.png`
+  (line: time per token vs tokens generated so far, mean over runs, moving average), `results/logs/`.
 - `servers/<name>/serve.sh` — one launcher per server (transformers, mlx-lm, vllm-metal).
 - `servers/transformers/pyproject.toml` — service A deps (torch, `transformers[serving]`, accelerate).
 - `servers/mlx-lm/pyproject.toml` — service B deps (mlx-lm).
@@ -62,7 +64,8 @@ Always check exact flags with each tool's `--help`; the commands above are a sta
 ## Benchmark rules (keep these invariant)
 
 - **One server running at a time** during measurements.
-- Same prompt for every framework, `temperature=0`, fixed `max_tokens` (256), streaming on.
+- Same prompt for every framework (a long-story request, so outputs reach `max_tokens`),
+  `temperature=0`, `max_tokens` 1024, streaming on.
 - 3 warm-up requests discarded, then 10 timed runs, one request at a time (N = 1).
   Concurrency N = 4, 16 is a possible follow-up, not implemented.
 - Output token counts come from the response `usage` field (request
@@ -71,7 +74,9 @@ Always check exact flags with each tool's `--help`; the commands above are a sta
   (output_tokens − 1) / (end − first_token); end-to-end (only comparable at equal
   output length); throughput = total output tokens / wall-clock at N concurrent.
 - Report median and spread (IQR or min/max), never a single run.
-- Results CSV: one row per timed request, `framework, run, total_s, ttft_s, tokens`.
+- Results CSV: one row per timed request, `framework, run, total_s, ttft_s, tokens, ms_per_token`.
+- Per-token times: chunk arrival times spread evenly over `usage.completion_tokens`
+  (a chunk can hold several tokens). Token 1 (prefill/TTFT) is left out of the line plot.
 - Same precision everywhere: bf16. If a framework can't load the original repo, use
   `mlx-community/gemma-3-1b-it-bf16`, never a 4-bit/QAT checkpoint.
 - Record machine state with each run: plugged in, Low Power Mode off, browsers closed.

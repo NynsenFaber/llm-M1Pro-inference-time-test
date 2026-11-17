@@ -10,6 +10,7 @@ dependencies = [
     "pandas>=2.2",           # results CSV + median/spread
     "matplotlib>=3.9",       # plots
     "huggingface-hub>=1.0",  # provides the `hf` CLI (auth login, download)
+    "numpy>=2.5.5",
 ]
 
 [dependency-groups]

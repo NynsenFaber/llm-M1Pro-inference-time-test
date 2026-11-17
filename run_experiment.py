@@ -1,5 +1,6 @@
 """Start each server in turn (A: transformers, B: mlx-lm, C: vllm-metal), time 10 requests,
-stop it, then save results/results.csv and a bar plot of mean inference time.
+stop it, then save CSVs and two plots: mean time per generated token (bar) and
+time per token vs position in the output (line).
 
 uv run python run_experiment.py                       # all three
 uv run python run_experiment.py --only mlx-lm vllm    # a subset
@@ -17,6 +18,7 @@ from pathlib import Path
 
 import httpx
 import matplotlib
+import numpy as np
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -34,14 +36,18 @@ p = argparse.ArgumentParser()
 p.add_argument("--only", nargs="+", choices=SERVERS, default=list(SERVERS))
 p.add_argument("--runs", type=int, default=10)
 p.add_argument("--warmup", type=int, default=3)
-p.add_argument("--max-tokens", type=int, default=256)
-p.add_argument("--prompt", default="Write me a joke about computers.")
+p.add_argument("--max-tokens", type=int, default=1024)
+p.add_argument(
+    "--prompt",  # long output on purpose: the line plot needs many tokens to show slowdown
+    default="Write a long, detailed story of at least 1500 words about a lighthouse keeper.",
+)
+p.add_argument("--smooth", type=int, default=16, help="moving-average window for the line plot")
 p.add_argument("--startup-timeout", type=int, default=1800, help="s; first start downloads")
 args = p.parse_args()
 
 
 def chat(port, max_tokens):
-    """One streamed request. Returns (total_s, ttft_s, completion_tokens)."""
+    """One streamed request. Returns (total_s, completion_tokens, chunk arrival times in s)."""
     body = {
         "model": MODEL,
         "messages": [{"role": "user", "content": args.prompt}],
@@ -50,7 +56,7 @@ def chat(port, max_tokens):
         "stream": True,
         "stream_options": {"include_usage": True},
     }
-    ttft, usage = None, None
+    times, usage = [], None
     t0 = time.perf_counter()
     with httpx.stream(
         "POST", f"http://127.0.0.1:{port}/v1/chat/completions", json=body, timeout=600
@@ -61,14 +67,19 @@ def chat(port, max_tokens):
                 continue
             chunk = json.loads(line[6:])
             usage = chunk.get("usage") or usage
-            if ttft is None and any(
-                (c.get("delta") or {}).get("content") for c in chunk.get("choices", [])
-            ):
-                ttft = time.perf_counter() - t0
+            if any((c.get("delta") or {}).get("content") for c in chunk.get("choices", [])):
+                times.append(time.perf_counter() - t0)
     total = time.perf_counter() - t0
-    if ttft is None or not usage:
+    if not times or not usage:
         raise RuntimeError(f"no streamed text or no usage from port {port}")
-    return total, ttft, usage["completion_tokens"]
+    return total, usage["completion_tokens"], times
+
+
+def per_token(times, tokens):
+    """Elapsed time at tokens 1..tokens. A chunk may hold several tokens, so spread the
+    chunk arrival times evenly over the token count reported in usage."""
+    pos = np.arange(1, len(times) + 1) * tokens / len(times)
+    return np.interp(np.arange(1, tokens + 1), pos, times)
 
 
 def wait_ready(proc, port, log):
@@ -94,7 +105,7 @@ def stop(proc):
 
 
 (OUT / "logs").mkdir(parents=True, exist_ok=True)
-rows = []
+rows, token_rows = [], []
 for key in args.only:
     label, script, port = SERVERS[key]
     log = OUT / "logs" / f"{key}.log"
@@ -108,13 +119,22 @@ for key in args.only:
         for _ in range(args.warmup):
             chat(port, args.max_tokens)
         for run in range(args.runs):
-            total, ttft, tokens = chat(port, args.max_tokens)
+            total, tokens, times = chat(port, args.max_tokens)
+            ms_tok = 1000 * total / tokens
             print(
-                f"  run {run + 1:2d}: {total:6.3f}s  ttft {ttft:.3f}s  {tokens} tokens", flush=True
+                f"  run {run + 1:2d}: {total:6.3f}s  {tokens} tokens  {ms_tok:.2f} ms/token  "
+                f"ttft {times[0]:.3f}s",
+                flush=True,
             )
             rows.append(
-                {"framework": key, "run": run, "total_s": total, "ttft_s": ttft, "tokens": tokens}
+                {"framework": key, "run": run, "total_s": total, "ttft_s": times[0]}
+                | {"tokens": tokens, "ms_per_token": ms_tok}
             )
+            elapsed = per_token(times, tokens)
+            token_rows += [
+                {"framework": key, "run": run, "token": i + 1, "elapsed_s": t}
+                for i, t in enumerate(elapsed)
+            ]
     except (
         httpx.HTTPError,
         RuntimeError,
@@ -128,37 +148,61 @@ for key in args.only:
 if not rows:
     raise SystemExit("no successful runs, check results/logs/")
 
-with open(OUT / "results.csv", "w", newline="") as f:
-    w = csv.DictWriter(f, fieldnames=rows[0])
-    w.writeheader()
-    w.writerows(rows)
+for name, data in (("results.csv", rows), ("token_times.csv", token_rows)):
+    with open(OUT / name, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=data[0])
+        w.writeheader()
+        w.writerows(data)
 
 done = [k for k in args.only if any(r["framework"] == k for r in rows)]
-times = {k: [r["total_s"] for r in rows if r["framework"] == k] for k in done}
-toks = {k: statistics.median(r["tokens"] for r in rows if r["framework"] == k) for k in done}
-means = [statistics.mean(times[k]) for k in done]
-stds = [statistics.stdev(times[k]) if len(times[k]) > 1 else 0 for k in done]
+labels = [SERVERS[k][0] for k in done]
+colors = dict(zip(SERVERS, ["#4C72B0", "#55A868", "#C44E52"]))
+title = f"{MODEL}, bf16, M1 Pro, {args.runs} runs, max_tokens={args.max_tokens}"
 
-print("\nframework      mean (s)  std (s)  median tokens")
-for k, m, s in zip(done, means, stds):
-    print(f"{k:13s} {m:8.3f} {s:8.3f} {toks[k]:8.0f}")
+# Bar plot: mean time per generated token (whole request / tokens), error bar = std.
+ms = {k: [r["ms_per_token"] for r in rows if r["framework"] == k] for k in done}
+toks = {k: statistics.median(r["tokens"] for r in rows if r["framework"] == k) for k in done}
+means = [statistics.mean(ms[k]) for k in done]
+stds = [statistics.stdev(ms[k]) if len(ms[k]) > 1 else 0 for k in done]
+print("\nframework     ms/token (mean)  std  median tokens")
+for k, m, sd in zip(done, means, stds):
+    print(f"{k:13s} {m:14.2f} {sd:5.2f} {toks[k]:8.0f}")
 
 fig, ax = plt.subplots(figsize=(7, 4.5))
-bars = ax.bar(
-    [SERVERS[k][0] for k in done],
-    means,
-    yerr=stds,
-    capsize=6,
-    color=["#4C72B0", "#55A868", "#C44E52"][: len(done)],
-)
-ax.bar_label(
-    bars, labels=[f"{m:.2f}s\n({toks[k]:.0f} tok)" for k, m in zip(done, means)], padding=4
-)
-ax.set_ylabel("Mean inference time per request (s)")
-ax.set_title(
-    f"{MODEL}, bf16, M1 Pro: {args.runs} runs, max_tokens={args.max_tokens} (error bar = std)"
-)
-ax.set_ylim(0, max(m + s for m, s in zip(means, stds)) * 1.3)
+bars = ax.bar(labels, means, yerr=stds, capsize=6, color=[colors[k] for k in done])
+ax.bar_label(bars, labels=[f"{m:.1f} ms" for m in means], padding=4)
+ax.set_ylabel("Mean time per generated token (ms)")
+ax.set_title(title + "\n(request time / generated tokens, error bar = std)", fontsize=9)
+ax.set_ylim(0, max(m + sd for m, sd in zip(means, stds)) * 1.25)
 fig.tight_layout()
-fig.savefig(OUT / "inference_time.png", dpi=150)
-print(f"\nsaved {OUT / 'results.csv'} and {OUT / 'inference_time.png'}")
+fig.savefig(OUT / "time_per_token.png", dpi=150)
+
+# Line plot: time per token at each position in the output, mean over runs.
+# Token 1 is skipped: its time is the prompt prefill (TTFT), not a decode step.
+fig, ax = plt.subplots(figsize=(8, 4.5))
+for k, label in zip(done, labels):
+    runs = [
+        np.diff([t["elapsed_s"] for t in token_rows if t["framework"] == k and t["run"] == r])
+        for r in sorted({r["run"] for r in rows if r["framework"] == k})
+    ]
+    n = max(map(len, runs))
+    padded = np.full((len(runs), n), np.nan)
+    for j, d in enumerate(runs):
+        padded[j, : len(d)] = d
+    mean_ms = 1000 * np.nanmean(padded, axis=0)  # runs can stop at different lengths
+    w = min(args.smooth, len(mean_ms))
+    smooth = np.convolve(mean_ms, np.ones(w) / w, mode="valid")
+    ax.plot(
+        np.arange(len(smooth)) + 2 + (w - 1) / 2,
+        smooth,
+        label=label.replace("\n", " "),
+        color=colors[k],
+    )
+ax.set_xlabel("Generated tokens so far")
+ax.set_ylabel("Time per token (ms)")
+ax.set_title(title + f"\n(mean over runs, moving average of {args.smooth} tokens)", fontsize=9)
+ax.set_ylim(bottom=0)
+ax.legend()
+fig.tight_layout()
+fig.savefig(OUT / "latency_vs_tokens.png", dpi=150)
+print(f"\nsaved results.csv, token_times.csv, time_per_token.png, latency_vs_tokens.png in {OUT}")

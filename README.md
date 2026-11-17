@@ -13,8 +13,13 @@ Metal GPU access on macOS).
 A vs B compares PyTorch MPS with MLX; B vs C shows what the vLLM engine adds on top of MLX.
 
 `run_experiment.py` starts A, sends it 3 warm-up and 10 timed requests, stops it, then
-does the same for B and C. It writes the per-request times to `results/results.csv`
-and a bar chart of the mean inference time to `results/inference_time.png`.
+does the same for B and C. It produces two plots:
+
+- `results/time_per_token.png`: bar chart of the mean time per generated token
+  (request time / generated tokens) for each framework.
+- `results/latency_vs_tokens.png`: time per token against the number of tokens generated so
+  far, one line per framework. Each step attends to a longer context, so the lines are
+  expected to rise slowly; the gap between them shows which framework is faster.
 
 ## Requirements
 
@@ -74,24 +79,28 @@ Make sure nothing else is using ports 8001-8003. Then:
 uv run python run_experiment.py
 ```
 
-It prints each request's time, a summary table, and saves:
+It prints each request's time, a summary table, and saves in `results/`:
 
-- `results/results.csv`: one row per timed request (`framework, run, total_s, ttft_s, tokens`)
-- `results/inference_time.png`: mean inference time per framework, error bar = standard deviation
-- `results/logs/<framework>.log`: server output, for when something fails
+- `time_per_token.png` and `latency_vs_tokens.png`: the two plots above
+- `results.csv`: one row per timed request (`framework, run, total_s, ttft_s, tokens, ms_per_token`)
+- `token_times.csv`: elapsed time at every generated token of every request
+  (`framework, run, token, elapsed_s`), the data behind the line plot
+- `logs/<framework>.log`: server output, for when something fails
 
 If a framework fails, the script says so, keeps going with the others and plots the ones
 that worked. Useful options:
 
 ```bash
 uv run python run_experiment.py --only mlx-lm vllm      # rerun a subset
-uv run python run_experiment.py --runs 20 --max-tokens 128
-uv run python run_experiment.py --prompt "Explain how a CPU cache works."
+uv run python run_experiment.py --runs 20 --max-tokens 2048   # longer outputs
+uv run python run_experiment.py --smooth 32                    # smoother lines
 ```
 
-All requests use `temperature=0` and the same prompt and `max_tokens` (256 by default).
-The label on each bar shows the median number of generated tokens: inference times are
-only directly comparable when those numbers match.
+All requests use `temperature=0`, the same prompt (a request for a long story, so each
+answer is long enough to show the trend) and `max_tokens` 1024 by default. Times are per
+generated token, so frameworks stay comparable even if they stop at slightly different
+lengths. Servers may stream several tokens in one chunk; the script then spreads that
+chunk's time evenly over its tokens, using the token count from the response's `usage`.
 
 ## Run a server by hand
 
