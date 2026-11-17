@@ -18,6 +18,14 @@ To get updates, re-copy from upstream or install the plugins locally instead:
 | `vllm-bench-serve` | github.com/vllm-project/vllm-skills `plugins/vllm-skills/skills/vllm-bench-serve` | c996234 | Apache-2.0 |
 | `mlx-lm` | github.com/itsmostafa/llm-engineering-skills `skills/mlx` | c364a15 | MIT (c) 2026 Mostafa. Edit: frontmatter `name` changed `mlx` → `mlx-lm` |
 | `vllm-metal` | written for this project from github.com/vllm-project/vllm-metal docs (main, 2026-11-16) | — | — |
+| `ponytail`, `ponytail-review`, `ponytail-audit`, `ponytail-help`, `ponytail-debt`, `ponytail-gain` | github.com/DietrichGebert/ponytail `skills/` (v5.3.3) | 96608e0 | MIT (c) 2026 DietrichGebert |
+
+Ponytail note: only the skill Markdown was copied. The plugin's hooks (Node
+scripts for a status line, auto-activation, and a per-task ledger written to
+`~/.config/ponytail/` with an optional webhook) were left out; install the plugin
+locally with `/plugin marketplace add DietrichGebert/ponytail` if you want them.
+Because the auto-activation hook is missing, CLAUDE.md asks for the `ponytail`
+skill to be used whenever code is written.
 
 Why these and not others:
 
