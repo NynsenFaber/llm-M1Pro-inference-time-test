@@ -96,7 +96,9 @@ Always check exact flags with each tool's `--help`; the commands above are a sta
   is batched vs batched. It sends `usage` only when the request has
   `stream_options: {"include_usage": true}`. Requests may send
   `"model": "google/gemma-3-1b-it"` (same as `--model`, no reload) or omit it.
-  Gemma 3 text (`gemma3_text`) is a supported architecture.
+  Gemma 3 text (`gemma3_text`) is a supported architecture. A request carrying `seed`
+  is not batchable (`_is_batchable` requires `seed is None`) and runs on the sequential
+  path, so `run_experiment.py` sends `seed` only when `--temperature > 0`.
 
 - `transformers serve` (5.23, read from source): `--device mps --dtype bfloat16` are
   passed straight to `from_pretrained`; the positional model arg pins the server, so
