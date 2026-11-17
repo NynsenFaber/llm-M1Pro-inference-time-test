@@ -39,12 +39,12 @@ uv run hf download google/gemma-3-1b-it   # shared cache ~/.cache/huggingface/hu
 # A — transformers on MPS (bf16, pinned model, no CPU fallback)
 servers/transformers/serve.sh                          # sequential model.generate()
 servers/transformers/serve.sh --continuous-batching    # optional variant: paged KV + batching
-# B — mlx-lm
-uv run --project servers/mlx-lm mlx_lm.server --model google/gemma-3-1b-it --port 8002
+# B — mlx-lm (prompt cache off; MODEL=mlx-community/gemma-3-1b-it-bf16 if the original repo fails)
+servers/mlx-lm/serve.sh
 # C — vllm-metal
 curl -fsSL https://raw.githubusercontent.com/vllm-project/vllm-metal/main/install.sh | bash
 source ~/.venv-vllm-metal/bin/activate
-vllm serve google/gemma-3-1b-it --port 8003 --dtype bfloat16 --generation-config vllm
+vllm serve google/gemma-3-1b-it --port 8003 --dtype bfloat16 --generation-config vllm --no-enable-prefix-caching
 
 # smoke test any port
 curl -s localhost:8002/v1/chat/completions -H 'Content-Type: application/json' \
@@ -80,8 +80,15 @@ Always check exact flags with each tool's `--help`; the commands above are a sta
   vllm-metal v0.2.0. `VLLM_METAL_MEMORY_FRACTION` was removed (use `--gpu-memory-utilization`).
 - vllm-metal by default applies the model's `generation_config.json`; pass
   `--generation-config vllm` so the client's sampling params are what run.
-- Consider `--no-enable-prefix-caching` on vllm-metal so repeated prompts don't
-  shortcut TTFT; mlx-lm's server also has a prompt cache. Note which is on in results.
+- Prompt/prefix caching is **off** on every server so repeated prompts don't shortcut
+  TTFT: mlx-lm `--prompt-cache-size 0` (set in `serve.sh`), vllm-metal
+  `--no-enable-prefix-caching`; transformers serve has no cross-request prompt cache.
+- `mlx_lm.server` (0.32.2, read from source): batches concurrent requests itself
+  (`--decode-concurrency` 32, `--prompt-concurrency` 8 by default), so B vs C at N = 4/16
+  is batched vs batched. It sends `usage` only when the request has
+  `stream_options: {"include_usage": true}`. Requests may send
+  `"model": "google/gemma-3-1b-it"` (same as `--model`, no reload) or omit it.
+  Gemma 3 text (`gemma3_text`) is a supported architecture.
 
 - `transformers serve` (5.23, read from source): `--device mps --dtype bfloat16` are
   passed straight to `from_pretrained`; the positional model arg pins the server, so
