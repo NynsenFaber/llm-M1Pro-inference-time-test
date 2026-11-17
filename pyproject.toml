@@ -21,3 +21,4 @@ package = false
 
 [tool.ruff]
 line-length = 100
+extend-exclude = [".claude"]  # vendored skills: keep identical to upstream

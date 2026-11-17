@@ -2,6 +2,6 @@
 __pycache__/
 *.pyc
 .ruff_cache/
-results/raw/
+results/logs/
 benchmark-results/
 .DS_Store
