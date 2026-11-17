@@ -21,6 +21,12 @@ cannot run MPS/MLX/Metal. Don't claim benchmark numbers that weren't measured on
 ## Layout
 
 - `pyproject.toml` (root) — benchmark client env: httpx, pandas, matplotlib, `hf` CLI. `uv sync` here.
+- `run_experiment.py` — the experiment: starts each server's `serve.sh` in turn, 3 warm-up +
+  10 timed streamed requests, stops it; writes `results/results.csv` (per request),
+  `results/token_times.csv` (elapsed time at each generated token), `results/time_per_token.png`
+  (bar: mean ms per generated token, std error bars), `results/latency_vs_tokens.png`
+  (line: time per token vs tokens generated so far, mean over runs, moving average), `results/logs/`.
+- `servers/<name>/serve.sh` — one launcher per server (transformers, mlx-lm, vllm-metal).
 - `servers/transformers/pyproject.toml` — service A deps (torch, `transformers[serving]`, accelerate).
 - `servers/mlx-lm/pyproject.toml` — service B deps (mlx-lm).
 - vllm-metal is **not** a uv project here: it pins its own vllm/torch/mlx and is installed by its own script.
@@ -39,19 +45,18 @@ uv run hf download google/gemma-3-1b-it   # shared cache ~/.cache/huggingface/hu
 # A — transformers on MPS (bf16, pinned model, no CPU fallback)
 servers/transformers/serve.sh                          # sequential model.generate()
 servers/transformers/serve.sh --continuous-batching    # optional variant: paged KV + batching
-# B — mlx-lm
-uv run --project servers/mlx-lm mlx_lm.server --model google/gemma-3-1b-it --port 8002
-# C — vllm-metal
+# B — mlx-lm (prompt cache off; MODEL=mlx-community/gemma-3-1b-it-bf16 if the original repo fails)
+servers/mlx-lm/serve.sh
+# C — vllm-metal (install once; serve.sh finds ~/.venv-vllm-metal or a Homebrew `vllm`)
 curl -fsSL https://raw.githubusercontent.com/vllm-project/vllm-metal/main/install.sh | bash
-source ~/.venv-vllm-metal/bin/activate
-vllm serve google/gemma-3-1b-it --port 8003 --dtype bfloat16 --generation-config vllm
+servers/vllm-metal/serve.sh
 
 # smoke test any port
 curl -s localhost:8002/v1/chat/completions -H 'Content-Type: application/json' \
   -d '{"model":"google/gemma-3-1b-it","messages":[{"role":"user","content":"write me a joke"}],"max_tokens":32,"temperature":0}'
 
-# benchmark (client env)
-uv run python bench.py ...
+# the experiment: A, then B, then C (one server at a time)
+uv run python run_experiment.py            # --only mlx-lm vllm, --runs, --max-tokens, --prompt
 ```
 
 Always check exact flags with each tool's `--help`; the commands above are a starting point.
@@ -59,16 +64,19 @@ Always check exact flags with each tool's `--help`; the commands above are a sta
 ## Benchmark rules (keep these invariant)
 
 - **One server running at a time** during measurements.
-- Same prompts for every framework (a short "write me a joke" and a longer one),
-  `temperature=0`, fixed `max_tokens` (256), streaming on.
-- 3 warm-up requests discarded, then 10 timed runs per prompt; concurrency N = 1, 4, 16.
+- Same prompt for every framework (a long-story request, so outputs reach `max_tokens`),
+  `temperature=0`, `max_tokens` 1024, streaming on.
+- 3 warm-up requests discarded, then 10 timed runs, one request at a time (N = 1).
+  Concurrency N = 4, 16 is a possible follow-up, not implemented.
 - Output token counts come from the response `usage` field (request
   `stream_options: {"include_usage": true}`), never from splitting text.
 - Metrics: TTFT = first streamed token − send time; decode tok/s =
   (output_tokens − 1) / (end − first_token); end-to-end (only comparable at equal
   output length); throughput = total output tokens / wall-clock at N concurrent.
 - Report median and spread (IQR or min/max), never a single run.
-- Results CSV in long format: `framework, prompt, N, metric, value` (+ run index); plot afterwards.
+- Results CSV: one row per timed request, `framework, run, total_s, ttft_s, tokens, ms_per_token`.
+- Per-token times: chunk arrival times spread evenly over `usage.completion_tokens`
+  (a chunk can hold several tokens). Token 1 (prefill/TTFT) is left out of the line plot.
 - Same precision everywhere: bf16. If a framework can't load the original repo, use
   `mlx-community/gemma-3-1b-it-bf16`, never a 4-bit/QAT checkpoint.
 - Record machine state with each run: plugged in, Low Power Mode off, browsers closed.
@@ -80,8 +88,15 @@ Always check exact flags with each tool's `--help`; the commands above are a sta
   vllm-metal v0.2.0. `VLLM_METAL_MEMORY_FRACTION` was removed (use `--gpu-memory-utilization`).
 - vllm-metal by default applies the model's `generation_config.json`; pass
   `--generation-config vllm` so the client's sampling params are what run.
-- Consider `--no-enable-prefix-caching` on vllm-metal so repeated prompts don't
-  shortcut TTFT; mlx-lm's server also has a prompt cache. Note which is on in results.
+- Prompt/prefix caching is **off** on every server so repeated prompts don't shortcut
+  TTFT: mlx-lm `--prompt-cache-size 0` (set in `serve.sh`), vllm-metal
+  `--no-enable-prefix-caching`; transformers serve has no cross-request prompt cache.
+- `mlx_lm.server` (0.32.2, read from source): batches concurrent requests itself
+  (`--decode-concurrency` 32, `--prompt-concurrency` 8 by default), so B vs C at N = 4/16
+  is batched vs batched. It sends `usage` only when the request has
+  `stream_options: {"include_usage": true}`. Requests may send
+  `"model": "google/gemma-3-1b-it"` (same as `--model`, no reload) or omit it.
+  Gemma 3 text (`gemma3_text`) is a supported architecture.
 
 - `transformers serve` (5.23, read from source): `--device mps --dtype bfloat16` are
   passed straight to `from_pretrained`; the positional model arg pins the server, so
