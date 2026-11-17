@@ -75,9 +75,11 @@ then `brew install vllm-project/vllm-metal/vllm-metal`. The start script finds e
 
 **5. Install SGLang**
 
-SGLang has no macOS package; its [Apple Silicon guide](https://docs.sglang.io/docs/hardware-platforms/apple_metal)
-installs it from source. This script does that, pinned to a fixed commit, into
-`servers/sglang/.venv` (source in `servers/sglang/src`). It takes a few minutes:
+SGLang is a uv project like the transformers and mlx-lm servers (`servers/sglang/pyproject.toml`
+and `uv.lock`), but it has no macOS package, so its [Apple Silicon guide](https://docs.sglang.io/docs/hardware-platforms/apple_metal)
+installs it from source. This script downloads that source at a fixed commit into
+`servers/sglang/src`, applies the guide's one setup step, then runs `uv sync`. It takes a
+few minutes:
 
 ```bash
 servers/sglang/install.sh

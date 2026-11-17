@@ -8,7 +8,7 @@ under four frameworks, run **natively** (no Docker: it has no Metal GPU access o
 | A | Hugging Face transformers (`transformers serve`) | PyTorch MPS | 8001 | `servers/transformers/` (uv project) |
 | B | mlx-lm (`mlx_lm.server`) | MLX / Metal | 8002 | `servers/mlx-lm/` (uv project) |
 | C | vllm-metal (`vllm serve`) | vLLM engine + MLX / Metal | 8003 | `~/.venv-vllm-metal` (official installer) or Homebrew |
-| D | SGLang (`sglang.launch_server`, `SGLANG_USE_MLX=1`) | SGLang engine + MLX / Metal | 8004 | `servers/sglang/.venv` (source install by `servers/sglang/install.sh`) |
+| D | SGLang (`sglang.launch_server`, `SGLANG_USE_MLX=1`) | SGLang engine + MLX / Metal | 8004 | `servers/sglang/` (uv project; `install.sh` fetches the source, then `uv sync`) |
 
 What each comparison isolates: **A vs B** = PyTorch MPS vs MLX; **B vs C** = what the
 vLLM engine (scheduler, continuous batching, paged KV cache) adds on top of MLX; **B vs D**
@@ -29,9 +29,14 @@ cannot run MPS/MLX/Metal. Don't claim benchmark numbers that weren't measured on
   (bar: mean ms per generated token, std error bars), `results/latency_vs_tokens.png`
   (line: time per token vs tokens generated so far, mean over runs, moving average), `results/logs/`.
 - `servers/<name>/serve.sh` — one launcher per server (transformers, mlx-lm, vllm-metal, sglang).
-- `servers/sglang/install.sh` — source install of SGLang pinned to commit 703e763 (no macOS
-  wheel): clone to `servers/sglang/src` (gitignored), swap in `pyproject_other.toml`,
-  `uv pip install -e "src/python[srt_mps]"` with `SGLANG_BUILD_RUST_EXTS=none`.
+- `servers/sglang/pyproject.toml` — service D: uv project depending on `sglang[srt_mps]` from the
+  local checkout `src/python` (editable). Its default pyproject is CUDA-only, so a plain git
+  dependency can't work. `[tool.uv.extra-build-variables]` sets `SGLANG_BUILD_RUST_EXTS=none`
+  (skips the cargo-built multimodal extension). `uv.lock` resolved: torch 2.13.0, mlx 0.32.4,
+  mlx-lm 0.32.2, no CUDA packages.
+- `servers/sglang/install.sh` — fetches sglang at commit 703e763 into `servers/sglang/src`
+  (gitignored), swaps in `pyproject_other.toml` (the guide's step), then `uv sync`. If you bump
+  the commit, rerun `uv lock` in `servers/sglang`.
 - `servers/transformers/pyproject.toml` — service A deps (torch, `transformers[serving]`, accelerate).
 - `servers/mlx-lm/pyproject.toml` — service B deps (mlx-lm).
 - vllm-metal is **not** a uv project here: it pins its own vllm/torch/mlx and is installed by its own script.
