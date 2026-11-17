@@ -1,8 +1,8 @@
-"""Start each server in turn (A: transformers, B: mlx-lm, C: vllm-metal), time 10 requests,
+"""Start each server in turn (A: transformers, B: mlx-lm, C: vllm-metal, D: SGLang), time 10 requests,
 stop it, then save CSVs and two plots: mean time per generated token (bar) and
 time per token vs position in the output (line).
 
-uv run python run_experiment.py                       # all three
+uv run python run_experiment.py                       # all four
 uv run python run_experiment.py --only mlx-lm vllm    # a subset
 """
 
@@ -30,6 +30,7 @@ SERVERS = {  # key: (plot label, start script, port)
     "transformers": ("Hugging Face\n(PyTorch MPS)", "servers/transformers/serve.sh", 8001),
     "mlx-lm": ("mlx-lm\n(MLX)", "servers/mlx-lm/serve.sh", 8002),
     "vllm": ("vLLM\n(vllm-metal)", "servers/vllm-metal/serve.sh", 8003),
+    "sglang": ("SGLang\n(MLX)", "servers/sglang/serve.sh", 8004),
 }
 
 p = argparse.ArgumentParser()
@@ -165,7 +166,7 @@ for name, data in (("results.csv", rows), ("token_times.csv", token_rows)):
 
 done = [k for k in args.only if any(r["framework"] == k for r in rows)]
 labels = [SERVERS[k][0] for k in done]
-colors = dict(zip(SERVERS, ["#4C72B0", "#55A868", "#C44E52"]))
+colors = dict(zip(SERVERS, ["#4C72B0", "#55A868", "#C44E52", "#8172B3"]))
 title = f"{MODEL}, bf16, M1 Pro, {args.runs} runs, max_tokens={args.max_tokens}, " + (
     f"temperature={args.temperature}, seed={args.seed}" if args.temperature > 0 else "greedy"
 )

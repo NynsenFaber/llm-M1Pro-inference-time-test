@@ -1,7 +1,7 @@
 # llm-M1Pro-inference-time-test
 
 How fast does the same model, **Gemma 3 1B (`google/gemma-3-1b-it`, bf16)**, run on a
-MacBook Pro M1 Pro under three frameworks? Everything runs natively (Docker has no
+MacBook Pro M1 Pro under four frameworks? Everything runs natively (Docker has no
 Metal GPU access on macOS).
 
 | | Framework | Compute backend | Port |
@@ -9,11 +9,14 @@ Metal GPU access on macOS).
 | A | Hugging Face transformers (`transformers serve`) | PyTorch MPS | 8001 |
 | B | mlx-lm (`mlx_lm.server`) | MLX (Metal) | 8002 |
 | C | vllm-metal (`vllm serve`) | vLLM engine + MLX (Metal) | 8003 |
+| D | SGLang (`sglang.launch_server`) | SGLang engine + MLX (Metal) | 8004 |
 
-A vs B compares PyTorch MPS with MLX; B vs C shows what the vLLM engine adds on top of MLX.
+A vs B compares PyTorch MPS with MLX. C and D each put a serving engine (scheduler,
+paged KV cache) on top of MLX, so B vs C vs D shows what each engine adds, and C vs D
+compares the two engines.
 
 `run_experiment.py` starts A, sends it 3 warm-up and 10 timed requests, stops it, then
-does the same for B and C. It produces two plots:
+does the same for B, C and D. It produces two plots:
 
 - `results/time_per_token.png`: bar chart of the mean time per generated token
   (request time / generated tokens) for each framework.
@@ -24,7 +27,7 @@ does the same for B and C. It produces two plots:
 ## Requirements
 
 - Apple Silicon Mac, macOS 15 (Sequoia) or later (needed by vllm-metal)
-- About 10 GB free disk (model weights + three Python environments)
+- About 15 GB free disk (model weights + four Python environments + the SGLang source)
 - [uv](https://docs.astral.sh/uv/): `curl -LsSf https://astral.sh/uv/install.sh | sh`
 - A Hugging Face account
 
@@ -48,7 +51,7 @@ uv run hf auth login
 uv run hf download google/gemma-3-1b-it
 ```
 
-The weights go to `~/.cache/huggingface/hub`, which all three frameworks share.
+The weights go to `~/.cache/huggingface/hub`, which all four frameworks share.
 
 **3. Install the transformers and mlx-lm servers**
 
@@ -70,10 +73,24 @@ curl -fsSL https://raw.githubusercontent.com/vllm-project/vllm-metal/main/instal
 (Homebrew also works: `brew tap vllm-project/vllm-metal https://github.com/vllm-project/vllm-metal`
 then `brew install vllm-project/vllm-metal/vllm-metal`. The start script finds either.)
 
+**5. Install SGLang**
+
+SGLang has no macOS package; its [Apple Silicon guide](https://docs.sglang.io/docs/hardware-platforms/apple_metal)
+installs it from source. This script does that, pinned to a fixed commit, into
+`servers/sglang/.venv` (source in `servers/sglang/src`). It takes a few minutes:
+
+```bash
+servers/sglang/install.sh
+```
+
+It needs macOS 14 or newer and git. It skips two optional native parts: SGLang's own Metal
+kernels (they need the full Xcode app) and a Rust extension used only by some
+image/video models. The server runs on SGLang's MLX backend (`SGLANG_USE_MLX=1`).
+
 ## Run the experiment
 
 Plug in the charger, turn Low Power Mode off and close browsers and other GPU-heavy apps.
-Make sure nothing else is using ports 8001-8003. Then:
+Make sure nothing else is using ports 8001-8004. Then:
 
 ```bash
 uv run python run_experiment.py
@@ -119,6 +136,7 @@ chunk's time evenly over its tokens, using the token count from the response's `
 servers/transformers/serve.sh   # A, port 8001
 servers/mlx-lm/serve.sh         # B, port 8002
 servers/vllm-metal/serve.sh     # C, port 8003
+servers/sglang/serve.sh         # D, port 8004
 ```
 
 ```bash
@@ -139,3 +157,6 @@ curl -s localhost:8002/v1/chat/completions -H 'Content-Type: application/json' \
   on purpose so timings stay GPU-only. To see whether it runs at all, start it with
   `PYTORCH_ENABLE_MPS_FALLBACK=1`, and note it in the results.
 - **"vllm not found":** install vllm-metal (step 4).
+- **"SGLang not installed":** run `servers/sglang/install.sh` (step 5). SGLang's Apple
+  Silicon support is new: if it fails on Gemma 3, the other three still run; skip it with
+  `--only transformers mlx-lm vllm` and check `results/logs/sglang.log`.
