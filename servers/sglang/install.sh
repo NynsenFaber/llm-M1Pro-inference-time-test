@@ -16,6 +16,9 @@ git -C src fetch -q --depth 1 origin "$COMMIT"
 git -C src checkout -q --force "$COMMIT"  # --force also restores the file moved below
 # The guide's step: replace the CUDA pyproject with the one for other platforms (srt_mps extra).
 mv src/python/pyproject_other.toml src/python/pyproject.toml
+# mlx-lm's gemma3 has a sliding_window_pattern but no layer_types, so the MLX runner
+# refused to load it ("declares sliding-window attention but ... no per-layer window map").
+git -C src apply "$PWD/gemma3-window.patch"
 
 uv sync
 echo "SGLang installed. Start it with servers/sglang/serve.sh"
