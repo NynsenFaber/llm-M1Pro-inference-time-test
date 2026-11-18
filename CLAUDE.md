@@ -35,7 +35,8 @@ cannot run MPS/MLX/Metal. Don't claim benchmark numbers that weren't measured on
   (skips the cargo-built multimodal extension). `uv.lock` resolved: torch 2.13.0, mlx 0.32.4,
   mlx-lm 0.32.2, no CUDA packages.
 - `servers/sglang/install.sh` — fetches sglang at commit 703e763 into `servers/sglang/src`
-  (gitignored), swaps in `pyproject_other.toml` (the guide's step), then `uv sync`. If you bump
+  (gitignored), swaps in `pyproject_other.toml` (the guide's step), applies
+  `gemma3-window.patch`, then `uv sync`. If you bump
   the commit, rerun `uv lock` in `servers/sglang`.
 - `servers/transformers/pyproject.toml` — service A deps (torch, `transformers[serving]`, accelerate).
 - `servers/mlx-lm/pyproject.toml` — service B deps (mlx-lm).
