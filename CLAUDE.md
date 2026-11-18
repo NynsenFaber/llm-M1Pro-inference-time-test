@@ -109,7 +109,7 @@ Always check exact flags with each tool's `--help`; the commands above are a sta
   is not batchable (`_is_batchable` requires `seed is None`) and runs on the sequential
   path, so `run_experiment.py` sends `seed` only when `--temperature > 0`.
 
-- SGLang (commit 703e763, read from source, not yet run): Apple Silicon serving runs on MLX
+- SGLang (commit 703e763, run on the Mac 2026-11-18): Apple Silicon serving runs on MLX
   with `SGLANG_USE_MLX=1` (else torch.mps fallback, less supported); needs macOS 14+, torch
   2.13.0 + MLX >= 0.32.4 via the `srt_mps` extra. The MLX runner loads weights with
   `mlx_lm.load` (so Gemma 3 text architecture is known) and its KV cache handles per-layer
@@ -132,7 +132,9 @@ Always check exact flags with each tool's `--help`; the commands above are a sta
   `AutoProcessor` (Gemma3Processor wants preprocessor_config.json, absent in the 1B text repo);
   `servers/transformers/serve.py` now falls back to `AutoTokenizer`. Not yet re-run.
 - Do mlx-lm, vllm-metal and SGLang load `google/gemma-3-1b-it` directly, or is the mlx-community bf16 copy needed?
-- Does SGLang's source install succeed on the Mac, and does its MLX backend serve Gemma 3?
+- SGLang serves Gemma 3 on MLX only with `servers/sglang/gemma3-window.patch` (applied by
+  `install.sh`): mlx-lm's gemma3 has `sliding_window_pattern` but no `layer_types`, which the
+  MLX runner needs to size sliding-window KV. Verified: 1024-token output stays coherent.
 - Does each server return `usage` in the final streamed chunk?
 - Expectation to test: at N = 1 the gap between B and C is small; C should pull ahead at N = 16.
 

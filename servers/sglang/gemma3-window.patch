@@ -1,0 +1,18 @@
+diff --git a/python/sglang/srt/hardware_backend/mlx/kv_cache/attention_contract.py b/python/sglang/srt/hardware_backend/mlx/kv_cache/attention_contract.py
+index 19414dc..de9b9a8 100644
+--- a/python/sglang/srt/hardware_backend/mlx/kv_cache/attention_contract.py
++++ b/python/sglang/srt/hardware_backend/mlx/kv_cache/attention_contract.py
+@@ -91,6 +91,13 @@ def get_layer_window_sizes(model: Any) -> dict[int, int | None]:
+     container = language_model_container(model)
+     layer_types = getattr(container, "layer_types", None)
+     window_size = first_present_attr(container, WINDOW_SIZE_ATTRS)
++    pattern = getattr(container, "sliding_window_pattern", None)
++    if not layer_types and pattern and window_size is not None:
++        # gemma3: every pattern-th layer is global, the rest slide (mlx-lm is_sliding).
++        layer_types = [
++            "full_attention" if (i + 1) % pattern == 0 else "sliding_attention"
++            for i in range(len(container.layers))
++        ]
+     if not layer_types or window_size is None:
+         return {}
+     return {
