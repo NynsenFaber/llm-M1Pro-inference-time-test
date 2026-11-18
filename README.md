@@ -24,6 +24,101 @@ does the same for B, C and D. It produces two plots:
   far, one line per framework. Each step attends to a longer context, so the lines are
   expected to rise slowly; the gap between them shows which framework is faster.
 
+## Results
+
+Measured on a MacBook Pro M1 Pro on 2026-11-18 (data in `results/`). Settings: one request
+at a time, greedy decoding (`temperature=0`), a long-story prompt, `max_tokens=1024`,
+3 warm-up requests, then 10 timed runs per framework. Every one of the 40 timed requests
+generated exactly 1,024 tokens, so all four frameworks are compared on identical output
+lengths. SGLang runs with a small local fix for Gemma 3 (see [SGLang note](#sglang-note)).
+
+![Mean time per generated token](results/time_per_token.png)
+
+| Framework | Time per token (median) | Range over 10 runs | Decode speed | Time to first token | Whole request |
+|---|---|---|---|---|---|
+| **SGLang** (MLX) | **13.9 ms** | 13.86–13.88 ms | **72.4 tokens/s** | **61 ms** | 14.2 s |
+| mlx-lm (MLX) | 15.6 ms | 15.53–15.59 ms | 64.5 tokens/s | 75 ms | 15.9 s |
+| vLLM (vllm-metal, MLX) | 18.0 ms | 17.99–18.05 ms | 55.7 tokens/s | 67 ms | 18.4 s |
+| Hugging Face (PyTorch MPS) | 18.6 ms | 18.58–19.15 ms | 54.0 tokens/s | 97 ms | 19.1 s |
+
+Decode speed = (tokens − 1) / (request time − time to first token), so it excludes the
+prompt processing.
+
+![Time per token vs tokens generated so far](results/latency_vs_tokens.png)
+
+| Framework | Tokens 2–64 | Tokens 768–1024 | Change |
+|---|---|---|---|
+| SGLang | 13.5 ms | 14.0 ms | +3% |
+| mlx-lm | 15.1 ms | 15.6 ms | +3% |
+| Hugging Face | 17.9 ms | 18.9 ms | +5% |
+| vLLM | 15.7 ms | 18.9 ms | +20% (in steps) |
+
+### Discussion
+
+**SGLang is the fastest, then mlx-lm, then vLLM and Hugging Face.** SGLang generates
+tokens 11% faster than mlx-lm and about 23–25% faster than vLLM and Hugging Face, and it
+also has the quickest first token. Each framework's 10 runs stay within a few hundredths
+of a millisecond of each other, so every gap in the table is a real difference, not noise.
+
+**PyTorch MPS vs MLX (A vs B).** Same weights and precision, different compute library:
+MLX is 16% faster per token and reaches the first token about 20 ms sooner.
+
+**What a serving engine adds on top of MLX (B vs C vs D).** vLLM and SGLang both run
+mlx-lm's own model code (they load it with `mlx_lm.load`), so comparing them with plain
+mlx-lm isolates what each engine adds. The two engines go in opposite directions:
+
+- **SGLang makes MLX faster**: 11% per token, and 14 ms sooner to the first token. The
+  likely reasons are its own pre-allocated KV cache and its "overlap scheduling", which
+  prepares the next step on the CPU while the GPU is still computing the current one
+  (`mx.async_eval`). These are hypotheses; running SGLang with `--disable-overlap-schedule`
+  would show how much the overlap contributes.
+- **vLLM makes MLX slower** after the first ~100 tokens. It starts exactly at mlx-lm's
+  speed (15.7 ms per token) and has a fast first token (67 ms), but then slows down in
+  steps, to about 19 ms per token. The steps fall at the same token positions in all 10
+  runs, and at the same positions as in an earlier, separate run, so they are caused by
+  the growing context, not by heat or background activity. The most likely cause is its
+  paged KV cache and attention path behaving differently as the context grows; the dip
+  around tokens 600–880 may be Gemma 3's sliding-window layers releasing old cache
+  blocks. Both are hypotheses, not verified.
+
+**vLLM vs SGLang (C vs D).** On the same backend and model code, SGLang is 23% faster per
+token and its speed barely changes as the output grows. Both engines are built to serve
+many requests at once, though; with one request at a time their scheduling is mostly
+overhead, so this is the least favourable case for both. Testing 4 and 16 simultaneous
+requests would show how they compare where they are meant to shine.
+
+**Longer context costs little.** Each new token attends to everything generated before
+it, so time per token should rise as the output grows. It does, but only slightly: Gemma 3
+uses a 512-token sliding window on 5 of every 6 layers, which keeps attention cheap.
+SGLang and mlx-lm rise 3% over 1,000 tokens, Hugging Face 5%, and only vLLM rises
+noticeably (20%), for the engine-related reasons above.
+
+**How close to the hardware limit.** Generating a token means reading all ~2 GB of bf16
+weights once, and the M1 Pro's memory bandwidth is about 200 GB/s, which caps a 1B model
+at roughly 100 tokens/s. SGLang reaches about 72% of that ceiling (72.4 tokens/s × 2 GB
+≈ 145 GB/s), mlx-lm 65%, vLLM and Hugging Face about 55%. So even this small model is
+largely limited by memory bandwidth, and the frameworks differ in how much overhead
+they add on top.
+
+### SGLang note
+
+SGLang's MLX backend refused to load Gemma 3 at the pinned commit: it needs a per-layer
+list of which layers use the sliding window, and mlx-lm's Gemma 3 model only provides the
+repeating pattern (`sliding_window_pattern`). `servers/sglang/gemma3-window.patch`,
+applied by `install.sh`, builds that list from the pattern using the same rule as mlx-lm
+(every 6th layer is global, the rest slide). With it, the 1,024-token outputs stay
+coherent.
+
+### Limits of this run
+
+- One model size, one prompt and one request at a time. Bigger models (more
+  bandwidth-bound) or many simultaneous users (where vLLM's and SGLang's batching helps)
+  may rank the frameworks differently.
+- The frameworks ran in a fixed order (Hugging Face, mlx-lm, vLLM, SGLang) rather than
+  alternating. The very small spread and the repeat of the earlier run's numbers make heat
+  an unlikely factor, but alternating the order would rule it out completely.
+- The bandwidth figures assume ~2 GB of weights read per token; they are estimates.
+
 ## Requirements
 
 - Apple Silicon Mac, macOS 15 (Sequoia) or later (needed by vllm-metal)
@@ -75,9 +170,12 @@ then `brew install vllm-project/vllm-metal/vllm-metal`. The start script finds e
 
 **5. Install SGLang**
 
-SGLang has no macOS package; its [Apple Silicon guide](https://docs.sglang.io/docs/hardware-platforms/apple_metal)
-installs it from source. This script does that, pinned to a fixed commit, into
-`servers/sglang/.venv` (source in `servers/sglang/src`). It takes a few minutes:
+SGLang is a uv project like the transformers and mlx-lm servers (`servers/sglang/pyproject.toml`
+and `uv.lock`), but it has no macOS package, so its [Apple Silicon guide](https://docs.sglang.io/docs/hardware-platforms/apple_metal)
+installs it from source. This script downloads that source at a fixed commit into
+`servers/sglang/src`, applies the guide's one setup step and a small Gemma 3 fix
+(`gemma3-window.patch`, see [SGLang note](#sglang-note)), then runs `uv sync`. It takes a
+few minutes:
 
 ```bash
 servers/sglang/install.sh

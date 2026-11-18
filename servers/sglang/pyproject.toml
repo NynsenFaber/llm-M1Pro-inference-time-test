@@ -1,0 +1,21 @@
+[project]
+name = "server-sglang"
+version = "0.1.0"
+description = "Service D: SGLang (scheduler + MLX on Metal), port 8004"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    # srt_mps = SGLang's Apple Silicon serving runtime: MLX, mlx-lm, torch.
+    "sglang[srt_mps]",
+]
+
+[tool.uv]
+package = false
+environments = ["sys_platform == 'darwin' and platform_machine == 'arm64'"]
+
+[tool.uv.sources]
+# No macOS wheel: built from a source checkout made by install.sh (see there).
+sglang = { path = "src/python", editable = true }
+
+[tool.uv.extra-build-variables]
+# Skip the Rust "multimodal" extension: needs cargo, only some image/video models use it.
+sglang = { SGLANG_BUILD_RUST_EXTS = "none" }
