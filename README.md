@@ -1,8 +1,7 @@
 # llm-M1Pro-inference-time-test
 
 How fast does the same model, **Gemma 3 1B (`google/gemma-3-1b-it`, bf16)**, run on a
-MacBook Pro M1 Pro under four frameworks? Everything runs natively (Docker has no
-Metal GPU access on macOS).
+MacBook Pro M1 Pro under four frameworks?
 
 | | Framework | Compute backend | Port |
 |---|---|---|---|
@@ -11,9 +10,6 @@ Metal GPU access on macOS).
 | C | vllm-metal (`vllm serve`) | vLLM engine + MLX (Metal) | 8003 |
 | D | SGLang (`sglang.launch_server`) | SGLang engine + MLX (Metal) | 8004 |
 
-A vs B compares PyTorch MPS with MLX. C and D each put a serving engine (scheduler,
-paged KV cache) on top of MLX, so B vs C vs D shows what each engine adds, and C vs D
-compares the two engines.
 
 `run_experiment.py` starts A, sends it 3 warm-up and 10 timed requests, stops it, then
 does the same for B, C and D. It produces two plots:
