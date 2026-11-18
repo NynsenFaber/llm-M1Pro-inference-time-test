@@ -24,6 +24,83 @@ does the same for B, C and D. It produces two plots:
   far, one line per framework. Each step attends to a longer context, so the lines are
   expected to rise slowly; the gap between them shows which framework is faster.
 
+## Results
+
+Measured on a MacBook Pro M1 Pro on 2026-11-18 (data in `results/`). Settings: one request
+at a time, greedy decoding (`temperature=0`), a long-story prompt, `max_tokens=1024`,
+3 warm-up requests, then 10 timed runs per framework. Every one of the 30 timed requests
+generated exactly 1,024 tokens, so all three are compared on identical output lengths.
+SGLang (D) is not in this run.
+
+![Mean time per generated token](results/time_per_token.png)
+
+| Framework | Time per token (median) | Range over 10 runs | Decode speed | Time to first token | Whole request |
+|---|---|---|---|---|---|
+| **mlx-lm** (MLX) | **15.8 ms** | 15.6–15.9 ms | **63.6 tokens/s** | 79 ms | 16.2 s |
+| vLLM (vllm-metal, MLX) | 18.1 ms | 18.0–19.4 ms | 55.4 tokens/s | **67 ms** | 18.5 s |
+| Hugging Face (PyTorch MPS) | 18.6 ms | 18.6–18.7 ms | 54.0 tokens/s | 99 ms | 19.1 s |
+
+Decode speed = (tokens − 1) / (request time − time to first token), so it excludes the
+prompt processing.
+
+![Time per token vs tokens generated so far](results/latency_vs_tokens.png)
+
+| Framework | Tokens 2–64 | Tokens 768–1024 | Change |
+|---|---|---|---|
+| mlx-lm | 15.6 ms | 15.8 ms | +2% |
+| Hugging Face | 17.9 ms | 18.8 ms | +5% |
+| vLLM | 15.8 ms | 18.9 ms | +19% (in steps) |
+
+### Discussion
+
+**mlx-lm is the fastest by a clear margin.** It generates tokens about 15% faster than
+both other frameworks. Each framework's 10 runs stay within about 0.1 ms of each other
+(apart from one slower vLLM run), so the 2.8 ms gap is a real difference, not noise.
+
+**PyTorch MPS vs MLX (A vs B).** Same weights and precision, different compute library:
+MLX is 15% faster per token and reaches the first token 20 ms sooner. Hugging Face is
+still close to vLLM (3% slower), so PyTorch's Mac GPU backend is competitive for
+single-request generation; it just isn't as efficient as MLX.
+
+**What the vLLM engine adds on top of MLX (B vs C).** vllm-metal runs mlx-lm's own model
+code, so this comparison isolates the vLLM engine (scheduler, paged KV cache, its own
+attention kernel):
+
+- It has the fastest time to first token (67 ms vs 79 ms for mlx-lm).
+- For the first ~100 tokens it generates exactly as fast as mlx-lm (15.8 ms per token).
+- After that it slows down in steps, to about 19 ms per token. The steps fall at the
+  same token positions in all 10 runs, so they come from the growing context, not from
+  heat or background activity. The most likely cause is the engine's paged KV cache and
+  attention path behaving differently as the context grows; the dip around tokens
+  640–830 may be Gemma 3's sliding-window layers releasing old cache blocks. Both are
+  hypotheses, not verified.
+
+vLLM is designed to serve many requests at once (continuous batching). With one request
+at a time, its scheduling machinery is pure overhead, so this run is its least favourable
+case. Testing 4 and 16 simultaneous requests would show whether it pulls ahead there.
+
+**Longer context costs little.** Each new token attends to everything generated before
+it, so time per token should rise as the output grows. It does, but only slightly: Gemma 3
+uses a 512-token sliding window on most of its layers, which keeps attention cheap. mlx-lm
+stays almost flat (+2% over 1,000 tokens), Hugging Face rises steadily (+5%), and only
+vLLM rises noticeably (+19%), for the engine-related reasons above.
+
+**How close to the hardware limit.** Generating a token means reading all ~2 GB of bf16
+weights once, and the M1 Pro's memory bandwidth is about 200 GB/s, which caps a 1B model
+at roughly 100 tokens/s. mlx-lm reaches about 64% of that ceiling (63.6 tokens/s × 2 GB
+≈ 127 GB/s), Hugging Face and vLLM about 55%. So even this small model is largely limited
+by memory bandwidth, and the frameworks differ in how much overhead they add on top.
+
+### Limits of this run
+
+- One model size, one prompt and one request at a time. Bigger models (more
+  bandwidth-bound) or many simultaneous users (where vLLM's batching helps) may rank the
+  frameworks differently.
+- The frameworks ran in a fixed order (Hugging Face, mlx-lm, vLLM) rather than
+  alternating. Heat does not explain vLLM's steps (they repeat at the same positions in
+  every run), but alternating the order would rule it out completely.
+- The bandwidth figures assume ~2 GB of weights read per token; they are estimates.
+
 ## Requirements
 
 - Apple Silicon Mac, macOS 15 (Sequoia) or later (needed by vllm-metal)
